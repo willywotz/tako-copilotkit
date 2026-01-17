@@ -6,7 +6,7 @@ This provides a simple HTTP API for the CopilotKit frontend to interact with Tak
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
