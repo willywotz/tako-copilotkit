@@ -1,8 +1,8 @@
 {
-  "buildCommand": "cd frontend && npm install && npm run build",
-  "outputDirectory": "frontend/dist",
-  "installCommand": "pip install -r api/requirements.txt && cd frontend && npm install",
-  "framework": "vite",
+  "framework": "nextjs",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
   "rewrites": [
     {
       "source": "/api/mcp/knowledge_search",

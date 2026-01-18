@@ -2,7 +2,7 @@
 
 import { ModelSelector } from "./ModelSelector";
 import { useState } from "react";
-import type { InputProps } from "@copilotkit/react-ui/dist/components/chat/props";
+import type { InputProps } from "@copilotkit/react-ui";
 
 export function ChatInputWithModelSelector({
   inProgress,
