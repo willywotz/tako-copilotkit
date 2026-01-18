@@ -31,9 +31,17 @@ def ExtractResources(resources: List[ResourceInput]):  # pylint: disable=invalid
     """Extract the 3-5 most relevant resources from a search result."""
 
 
-# Initialize Tavily API key
-tavily_api_key = os.getenv("TAVILY_API_KEY")
-tavily_client = TavilyClient(api_key=tavily_api_key)
+# Lazy-initialize Tavily client
+_tavily_client = None
+
+def get_tavily_client():
+    global _tavily_client
+    if _tavily_client is None:
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if not tavily_api_key:
+            raise ValueError("TAVILY_API_KEY environment variable is not set")
+        _tavily_client = TavilyClient(api_key=tavily_api_key)
+    return _tavily_client
 
 
 # Async version of Tavily search that runs the synchronous client in a thread pool
@@ -44,7 +52,7 @@ async def async_tavily_search(query: str) -> Dict[str, Any]:
         # Run the synchronous tavily_client.search in a thread pool
         return await loop.run_in_executor(
             None,
-            lambda: tavily_client.search(
+            lambda: get_tavily_client().search(
                 query=query,
                 search_depth="advanced",
                 include_answer=True,
