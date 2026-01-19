@@ -39,6 +39,18 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/env")
+def debug_env():
+    """Debug endpoint to check environment variables."""
+    import os
+    return {
+        "openai_key_present": "OPENAI_API_KEY" in os.environ,
+        "openai_key_length": len(os.getenv("OPENAI_API_KEY", "")) if os.getenv("OPENAI_API_KEY") else 0,
+        "port": os.getenv("PORT"),
+        "all_env_keys": sorted([k for k in os.environ.keys() if not k.startswith("_")])
+    }
+
+
 def main():
     """Run the uvicorn server."""
     port = int(os.getenv("PORT", "2024"))
