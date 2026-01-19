@@ -109,10 +109,10 @@ async def get_tako_chart_iframe(embed_url: str) -> Optional[str]:
   window.addEventListener("message", function(e) {{
     const d = e.data;
     if (d.type !== "tako::resize") return;
-    
+
     for (let iframe of document.querySelectorAll("iframe")) {{
       if (iframe.contentWindow !== e.source) continue;
-      iframe.style.height = d.height + "px";
+      iframe.style.height = (d.height + 4) + "px";
     }}
   }});
 }}();

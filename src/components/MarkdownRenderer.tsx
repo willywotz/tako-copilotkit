@@ -22,7 +22,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
       const iframes = document.querySelectorAll("iframe");
       for (const iframe of iframes) {
         if (iframe.contentWindow === event.source) {
-          iframe.style.height = `${data.height}px`;
+          iframe.style.height = `${data.height + 4}px`;
           break;
         }
       }
