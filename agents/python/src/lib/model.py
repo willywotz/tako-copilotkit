@@ -24,6 +24,8 @@ def get_model(state: AgentState) -> BaseChatModel:
         from langchain_openai import ChatOpenAI
 
         api_key = os.getenv("OPENAI_API_KEY")
+        print(f"DEBUG: OPENAI_API_KEY from environment: {api_key[:10] if api_key else 'NOT SET'}...")
+        print(f"DEBUG: All env vars starting with OPENAI: {[k for k in os.environ.keys() if 'OPENAI' in k]}")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
         return ChatOpenAI(temperature=0, model="gpt-4o-mini", api_key=api_key)

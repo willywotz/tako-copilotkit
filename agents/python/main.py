@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 load_dotenv()
+print(f"DEBUG: Environment variables loaded")
+print(f"DEBUG: OPENAI_API_KEY present: {'OPENAI_API_KEY' in os.environ}")
+print(f"DEBUG: OPENAI_API_KEY value: {os.getenv('OPENAI_API_KEY', 'NOT SET')[:10] if os.getenv('OPENAI_API_KEY') else 'NOT SET'}...")
 os.environ["LANGGRAPH_FASTAPI"] = "true"
 from src.agent import graph  # noqa: E402
 
