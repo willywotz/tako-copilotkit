@@ -23,7 +23,10 @@ def get_model(state: AgentState) -> BaseChatModel:
     if model == "openai":
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(temperature=0, model="gpt-4o-mini")
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        return ChatOpenAI(temperature=0, model="gpt-4o-mini", api_key=api_key)
     if model == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
