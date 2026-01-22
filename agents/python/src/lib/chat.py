@@ -1,6 +1,5 @@
 """Chat Node"""
 
-import re
 from typing import List, Literal, cast
 
 from copilotkit.langgraph import copilotkit_customize_config, copilotkit_emit_state
@@ -12,11 +11,12 @@ from langgraph.types import Command
 from src.lib.download import get_resource
 from src.lib.model import get_model
 from src.lib.state import AgentState, DataQuestion
-from src.lib.tako_mcp import call_tako_explore, format_explore_results, get_tako_chart_iframe
+from src.lib.mcp_integration import (
+    get_visualization_iframe
+)
 
 
 # Feature toggles
-ENABLE_EXPLORE_API = False
 ENABLE_DEEP_QUERIES = False
 
 
@@ -87,14 +87,6 @@ async def chat_node(
         ],
     )
 
-    # Debug: Log message history to diagnose OpenAI error
-    print(f"\n🔍 chat_node: Received {len(state['messages'])} messages:")
-    for i, msg in enumerate(state["messages"][-6:], max(0, len(state['messages'])-5)):
-        msg_type = type(msg).__name__
-        has_tool_calls = hasattr(msg, 'tool_calls') and msg.tool_calls
-        tool_name = msg.tool_calls[0]["name"] if has_tool_calls else "N/A"
-        print(f"  [{i}] {msg_type}{f' (tool_calls: {tool_name})' if has_tool_calls else ''}")
-
     state["resources"] = state.get("resources", [])
     research_question = state.get("research_question", "")
     report = state.get("report", "")
@@ -107,7 +99,7 @@ async def chat_node(
         # Tako charts - use stored description as content
         if resource.get("resource_type") == "tako_chart":
             title = resource.get("title", "")
-            pub_id = resource.get("pub_id")
+            card_id = resource.get("card_id")  # Changed from pub_id
             embed_url = resource.get("embed_url")
             description = resource.get("description", "")
 
@@ -118,9 +110,9 @@ async def chat_node(
             })
 
             # Build Tako charts map for post-processing (generate iframe on demand)
-            if title and (pub_id or embed_url):
-                # Store pub_id/embed_url for later iframe generation
-                tako_charts_map[title] = {"pub_id": pub_id, "embed_url": embed_url}
+            if title and (card_id or embed_url):
+                # Store card_id/embed_url for later iframe generation
+                tako_charts_map[title] = {"card_id": card_id, "embed_url": embed_url}
                 available_tako_charts.append(f"  - **{title}**\n    Description: {description}")
         else:
             # Web resources: use pre-stored Tavily summary (no download needed)
@@ -256,7 +248,6 @@ async def chat_node(
     await copilotkit_emit_state(config, state)
 
     ai_message = cast(AIMessage, response)
-
     if ai_message.tool_calls:
         if ai_message.tool_calls[0]["name"] == "WriteReport":
             report = ai_message.tool_calls[0]["args"].get("report", "")
@@ -279,8 +270,8 @@ async def chat_node(
                     embedded_charts.append(chart_title)
                     chart_info = tako_charts_map[chart_title]
                     # Generate iframe HTML on demand
-                    iframe_html = await get_tako_chart_iframe(
-                        pub_id=chart_info.get("pub_id"),
+                    iframe_html = await get_visualization_iframe(
+                        item_id=chart_info.get("card_id"),
                         embed_url=chart_info.get("embed_url")
                     )
                     if iframe_html:
@@ -288,16 +279,11 @@ async def chat_node(
                         iframe_only = re.sub(r'<script.*?</script>', '', iframe_html, flags=re.DOTALL)
                         return "\n\n" + iframe_only + "\n\n"
                     else:
-                        print(f"⚠️  Failed to generate iframe for: '{chart_title}'")
                         return f"\n\n[Chart iframe generation failed: {chart_title}]\n\n"
                 else:
-                    # Chart not found, leave marker but add warning
-                    print(f"⚠️  Chart not found for embedding: '{chart_title}'")
-                    print(f"   Available charts: {list(tako_charts_map.keys())[:3]}")
                     return f"\n\n[Chart not found: {chart_title}]\n\n"
 
             # Find all chart markers and replace them asynchronously
-            import asyncio
             chart_markers = re.finditer(r'\[TAKO_CHART:([^\]]+)\]', report)
             replacements = []
             for match in chart_markers:
@@ -308,14 +294,6 @@ async def chat_node(
             processed_report = report
             for start, end, replacement in reversed(replacements):
                 processed_report = processed_report[:start] + replacement + processed_report[end:]
-
-            # Log embedded charts
-            if embedded_charts:
-                print(f"\n✅ Embedded {len(embedded_charts)} Tako charts in report:")
-                for title in embedded_charts:
-                    print(f"   - {title}")
-            else:
-                print("\n⚠️  No Tako charts were embedded in the report (LLM didn't use [TAKO_CHART:...] markers)")
 
             return Command(
                 goto="chat_node",
@@ -333,55 +311,10 @@ async def chat_node(
             )
         if ai_message.tool_calls[0]["name"] == "WriteResearchQuestion":
             research_question = ai_message.tool_calls[0]["args"]["research_question"]
-
-            # Call explore API to get knowledge graph context (if enabled)
-            explore_context = ""
-            if ENABLE_EXPLORE_API:
-                print(f"\n{'='*80}")
-                print(f"🔍 EXPLORE API CALL")
-                print(f"Research Question: {research_question}")
-
-                # Add status update for Tako explore
-                state["logs"].append({"message": "Exploring Tako knowledge graph...", "done": False})
-                await copilotkit_emit_state(config, state)
-
-                explore_results = await call_tako_explore(research_question)
-                explore_context = format_explore_results(explore_results)
-
-                # Log explore results
-                if explore_results.get("total_matches", 0) > 0:
-                    print(f"\n📊 EXPLORE RESULTS:")
-                    if explore_results.get("entities"):
-                        print(f"  Entities ({len(explore_results['entities'])}):")
-                        for e in explore_results["entities"][:5]:
-                            print(f"    - {e.get('name', 'N/A')}")
-                    if explore_results.get("metrics"):
-                        print(f"  Metrics ({len(explore_results['metrics'])}):")
-                        for m in explore_results["metrics"][:5]:
-                            print(f"    - {m.get('name', 'N/A')}")
-                    if explore_results.get("cohorts"):
-                        print(f"  Cohorts ({len(explore_results['cohorts'])}):")
-                        for c in explore_results["cohorts"][:3]:
-                            print(f"    - {c.get('name', 'N/A')}")
-                    if explore_results.get("time_periods"):
-                        print(f"  Time Periods ({len(explore_results['time_periods'])}):")
-                        for t in explore_results["time_periods"][:3]:
-                            print(f"    - {t}")
-                else:
-                    print(f"  ⚠️  No explore results found")
-                print(f"{'='*80}\n")
-
-                # Mark explore as complete
-                state["logs"][-1]["done"] = True
-                await copilotkit_emit_state(config, state)
-            else:
-                print(f"⏭️  Explore API disabled (ENABLE_EXPLORE_API=False)")
-
             return Command(
                 goto="chat_node",
                 update={
                     "research_question": research_question,
-                    "explore_context": explore_context,
                     "messages": [
                         ai_message,
                         ToolMessage(
@@ -402,16 +335,6 @@ async def chat_node(
         elif tool_name == "GenerateDataQuestions":
             # Store data questions and route to search
             data_questions = ai_message.tool_calls[0]["args"].get("questions", [])
-
-            # Log generated data questions
-            print(f"\n{'='*80}")
-            print(f"❓ GENERATED DATA QUESTIONS ({len(data_questions)} total)")
-            for i, q in enumerate(data_questions, 1):
-                effort = q.get("search_effort", "unknown")
-                query_type = q.get("query_type", "unknown")
-                question = q.get("question", "N/A")
-                print(f"  {i}. [{effort.upper()}] [{query_type}] {question}")
-            print(f"{'='*80}\n")
 
             # Add status update for generated questions
             if data_questions:

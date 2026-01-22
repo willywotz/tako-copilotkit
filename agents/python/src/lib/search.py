@@ -15,7 +15,7 @@ from tavily import TavilyClient
 
 from src.lib.model import get_model
 from src.lib.state import AgentState
-from src.lib.tako_mcp import call_tako_knowledge_search
+from src.lib.mcp_integration import search_knowledge_base, get_visualization_iframe
 from src.lib.chat import ENABLE_DEEP_QUERIES
 
 
@@ -101,8 +101,6 @@ async def search_node(state: AgentState, config: RunnableConfig):
 
     # Filter out deep queries if disabled
     if not ENABLE_DEEP_QUERIES:
-        if deep_questions:
-            print(f"⏭️  Skipping {len(deep_questions)} deep queries (ENABLE_DEEP_QUERIES=False)")
         deep_questions = []
 
     # Add logs for both web and Tako searches
@@ -123,7 +121,7 @@ async def search_node(state: AgentState, config: RunnableConfig):
     # Run Tavily web search and Tako knowledge search in parallel
     tavily_tasks = [async_tavily_search(query) for query in queries]
     fast_tako_tasks = [
-        call_tako_knowledge_search(q["question"], search_effort="fast")
+        search_knowledge_base(q["question"], search_effort="fast")
         for q in fast_questions
     ]
 
@@ -145,40 +143,33 @@ async def search_node(state: AgentState, config: RunnableConfig):
         await copilotkit_emit_state(config, state)
 
     # Process fast Tako results
-    print(f"\n{'='*80}")
-    print(f"📈 TAKO SEARCH RESULTS (Fast)")
     for i, result in enumerate(fast_tako_results):
         log_index = num_tavily + i
         question = fast_questions[i]["question"]
         if isinstance(result, Exception):
             tako_results.append({"error": str(result)})
-            print(f"  ❌ '{question}' - ERROR: {result}")
         elif result:  # Tako returned results
             tako_results.extend(result)
-            print(f"  ✅ '{question}' - {len(result)} charts")
-            for chart in result[:2]:  # Show first 2 chart titles
-                print(f"      - {chart.get('title', 'N/A')[:60]}")
-        else:
-            print(f"  ⚠️  '{question}' - No results")
         state["logs"][log_index]["done"] = True
         await copilotkit_emit_state(config, state)
-    print(f"{'='*80}\n")
 
-    # STAGE 2: Deep searches - streaming (one at a time)
-    if deep_questions:
-        print(f"\n{'='*80}")
-        print(f"📈 TAKO SEARCH RESULTS (Deep)")
     for i, q_obj in enumerate(deep_questions):
         log_index = num_tavily + len(fast_questions) + i
         question = q_obj["question"]
         try:
-            result = await call_tako_knowledge_search(question, search_effort="deep")
+            result = await search_knowledge_base(question, search_effort="deep")
             if result:  # Tako returned results
                 # STREAM: Add resources immediately (incremental emission)
                 # This allows frontend to show charts as they arrive
                 existing_urls = {r.get("url") for r in state["resources"]}
                 for chart in result:
                     if chart.get("url") not in existing_urls:
+                        # Generate iframe HTML for preview modal
+                        iframe_html = await get_visualization_iframe(
+                            item_id=chart.get("id"),
+                            embed_url=chart.get("embed_url")
+                        )
+
                         state["resources"].append({
                             "url": chart["url"],
                             "title": chart["title"],
@@ -186,27 +177,20 @@ async def search_node(state: AgentState, config: RunnableConfig):
                             "content": chart["description"],  # Use description as content
                             "resource_type": "tako_chart",
                             "source": "Tako",
-                            "pub_id": chart.get("pub_id"),
+                            "card_id": chart.get("id"),  # Use card_id for frontend
                             "embed_url": chart.get("embed_url"),
+                            "iframe_html": iframe_html,  # Include iframe HTML for preview
                         })
                         existing_urls.add(chart["url"])
 
                 tako_results.extend(result)
-                print(f"  ✅ '{question}' - {len(result)} charts")
-                for chart in result[:2]:  # Show first 2 chart titles
-                    print(f"      - {chart.get('title', 'N/A')[:60]}")
-            else:
-                print(f"  ⚠️  '{question}' - No results")
 
             state["logs"][log_index]["done"] = True
             await copilotkit_emit_state(config, state)  # Stream progress + new resources
         except Exception as e:
-            print(f"  ❌ '{question}' - ERROR: {e}")
             tako_results.append({"error": str(e)})
             state["logs"][log_index]["done"] = True
             await copilotkit_emit_state(config, state)
-    if deep_questions:
-        print(f"{'='*80}\n")
 
     # Deduplicate Tako charts by title (same chart may appear in multiple searches)
     seen_titles = {}
@@ -220,7 +204,6 @@ async def search_node(state: AgentState, config: RunnableConfig):
             elif not title:  # Keep charts without titles
                 deduped_tako.append(chart)
     tako_results = deduped_tako
-    print(f"Deduplicated Tako results: {len(deduped_tako)} unique charts")
 
     config = copilotkit_customize_config(
         config,
@@ -291,17 +274,18 @@ async def search_node(state: AgentState, config: RunnableConfig):
 
     # Tag resources with resource_type and attach content
     for resource in resources:
-        # Check if this resource is from Tako by matching URL or pub_id
+        # Check if this resource is from Tako by matching URL or card_id
         is_tako = False
         for tako_result in tako_results:
             if isinstance(tako_result, dict) and (
                 resource.get("url") == tako_result.get("url") or
-                (tako_result.get("pub_id") and resource.get("title") == tako_result.get("title"))
+                (tako_result.get("id") and resource.get("title") == tako_result.get("title"))
             ):
                 is_tako = True
                 resource["resource_type"] = "tako_chart"
                 resource["source"] = "Tako"
-                resource["pub_id"] = tako_result.get("pub_id")
+                resource["card_id"] = tako_result.get("id")  # Changed from pub_id to card_id
+                resource["embed_url"] = tako_result.get("embed_url")  # Add embed_url
                 # Store truncated description as content (no iframe HTML)
                 resource["content"] = tako_result.get("description", "")
                 break
@@ -318,6 +302,19 @@ async def search_node(state: AgentState, config: RunnableConfig):
                             resource["content"] = tavily_item.get("content", "")
                             break
 
+    # Generate iframe HTML for Tako charts that don't have it yet
+    for resource in resources:
+        if resource.get("resource_type") == "tako_chart" and not resource.get("iframe_html"):
+            card_id = resource.get("card_id")
+            embed_url = resource.get("embed_url")
+            if card_id or embed_url:
+                iframe_html = await get_visualization_iframe(
+                    item_id=card_id,
+                    embed_url=embed_url
+                )
+                if iframe_html:
+                    resource["iframe_html"] = iframe_html
+
     # Enforce resource limit to prevent context bloat
     current_count = len(state["resources"])
     remaining_slots = MAX_TOTAL_RESOURCES - current_count
@@ -325,11 +322,7 @@ async def search_node(state: AgentState, config: RunnableConfig):
     if remaining_slots > 0:
         resources_to_add = resources[:remaining_slots]
         state["resources"].extend(resources_to_add)
-
-        if len(resources) > remaining_slots:
-            print(f"⚠️  Resource limit reached ({MAX_TOTAL_RESOURCES}). Added {len(resources_to_add)}/{len(resources)} resources.")
     else:
-        print(f"⚠️  Resource limit reached ({MAX_TOTAL_RESOURCES}). No new resources added.")
         resources_to_add = []
 
     # Only add ToolMessage response if we came from a Search tool call
