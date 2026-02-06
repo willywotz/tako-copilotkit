@@ -221,5 +221,3 @@ MIT License - See LICENSE file for details
 ---
 
 **Built as a demonstration of CopilotKit + LangGraph + MCP integration**
-
-test
